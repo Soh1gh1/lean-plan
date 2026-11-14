@@ -6,7 +6,7 @@ This repository contains the source code. Personal journals, backups, screenshot
 
 ## Download for Windows
 
-Download **Lean-Plan-1.8.0-Windows-x64.exe** from [Releases](https://github.com/Soh1gh1/lean-plan/releases/latest) and double-click it. Python and application libraries are included; no separate Python installation or `.runtime` folder is needed. GitHub's **Source code (zip)** is for running from source.
+Download **Lean-Plan-1.8.1-Windows-x64.exe** from [Releases](https://github.com/Soh1gh1/lean-plan/releases/latest) and double-click it. Python and application libraries are included; no separate Python installation or `.runtime` folder is needed. GitHub's **Source code (zip)** is for running from source.
 
 The desktop interface requires [Microsoft Edge WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/). Install the Evergreen x64 runtime if it is missing. The standalone EXE stores your journal in `%LOCALAPPDATA%\Lean Plan\data`, so closing the app or replacing the EXE preserves it. Existing source/portable builds continue using their own `data` folder.
 
