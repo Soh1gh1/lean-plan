@@ -84,6 +84,7 @@ def main():
                 assert store.settings()['onboarding_done']
                 assert store.entries()==[]
                 window.evaluate_js("[['weight','80'],['protein','150'],['fat','60'],['carbs','200']].forEach(([key,value])=>{const input=document.getElementById(key==='weight'?'latest-weight-input':'today-'+key);input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}); true")
+                window.evaluate_js("const calories=document.querySelector('#today-calories');calories.value='1020';calories.dispatchEvent(new Event('input',{bubbles:true}));true")
                 # Closing immediately must flush the debounce queue first.
                 window.destroy()
             except Exception as error:
@@ -96,7 +97,8 @@ def main():
             server.shutdown()
             server.server_close()
         if errors:raise errors[0]
-        assert store.entries()[0]['calories']==1940
+        assert store.entries()[0]['calories']==1020
+        assert store.entries()[0]['calorie_override']==1020
         print('Native WebView2: fitted work area, fixed size, maximize/fullscreen blocked, dark frame and autosave on immediate close passed.',flush=True)
 
 

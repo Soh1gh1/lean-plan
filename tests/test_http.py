@@ -47,7 +47,7 @@ class HTTPTests(unittest.TestCase):
         self.assertIn('Protein, g',rows[0])
         self.assertTrue(rows[1][-1].startswith("'="))
 
-    def test_backfill_is_marked_late_and_manual_calories_are_rejected(self):
+    def test_backfill_is_marked_late_and_computed_calorie_key_is_rejected(self):
         today=self.today.isoformat()
         with self.post('/api/entry',{'date':today,'weight':80}) as response:
             response.read()

@@ -12,8 +12,6 @@ from statistics import mean
 
 DEFAULT_SETTINGS = {
     "name": "", "age": None, "height": None, "sex": None,
-    "fat_free_mass": None,
-    "body_composition_mode": "fat_free_mass", "body_fat_percent": None,
     "goal_weight": None, "training_met": 2.25,
     "onboarding_done": False,
 }
@@ -56,12 +54,13 @@ def validate_entry(payload: dict, today=None, *, historical=False) -> dict:
         raise ValidationError("Invalid journal entry.")
     result = {"date": validate_date(payload.get("date"), today)}
     if payload.get("calories") not in (None, ""):
-        raise ValidationError("Calories are calculated automatically from protein, fat and carbs.")
+        raise ValidationError("Use calorie_override for manual calories.")
     fields = {
         "weight": ("Weight", 20, 500, False),
         "protein": ("Protein", 0, 1000, False),
         "fat": ("Fat", 0, 1000, False),
         "carbs": ("Carbohydrates", 0, 2000, False),
+        "calorie_override": ("Calories", 0, 50000, False),
         "training_minutes": ("Training minutes", 0, 1440, False),
         "training_met": ("MET", 1, 25, False),
         "steps": ("Steps", 0, 200000, True),
@@ -73,7 +72,7 @@ def validate_entry(payload: dict, today=None, *, historical=False) -> dict:
     if not isinstance(note, str) or len(note) > 2000:
         raise ValidationError("Notes can contain up to 2,000 characters.")
     result["note"] = note.strip()
-    result["calories"] = macro_energy(result)
+    result["calories"] = intake_energy(result)
     return result
 
 
@@ -84,19 +83,11 @@ def validate_settings(payload: dict, current=None) -> dict:
     fields = {
         "age": ("Age", 18, 120, True), "height": ("Height", 50, 250, False),
         "goal_weight": ("Goal weight", 20, 500, False),
-        "fat_free_mass": ("Fat-free mass", 1, 500, False),
-        "body_fat_percent": ("Body fat", 0, 100, False),
         "training_met": ("MET", 1, 25, False),
     }
     for key, (label, low, high, integer) in fields.items():
         if key in payload:
             result[key] = number(payload[key], label, low, high, integer=integer)
-    if result["body_fat_percent"] == 100:
-        raise ValidationError("Body fat: enter a value below 100%.")
-    if "body_composition_mode" in payload:
-        if payload["body_composition_mode"] not in ("fat_free_mass", "body_fat"):
-            raise ValidationError("Choose fat-free mass or body fat.")
-        result["body_composition_mode"] = payload["body_composition_mode"]
     if result["training_met"] is None:
         result["training_met"] = 2.25
     if "name" in payload:
@@ -129,6 +120,18 @@ def macro_tef(entry: dict):
                        (("protein", 1), ("carbs", .3), ("fat", .18)) if entry.get(key) is not None))
 
 
+def intake_energy(entry: dict):
+    """A present manual value, including zero, takes precedence over macros."""
+    override = entry.get("calorie_override")
+    return rounded(override) if override is not None else macro_energy(entry)
+
+
+def calorie_source(entry: dict):
+    if entry.get("calorie_override") is not None:
+        return "manual"
+    return "macros" if macro_energy(entry) is not None else None
+
+
 def calculate_day(entry: dict, settings: dict, weight: float | None) -> dict:
     """BMR + net training energy + explicitly entered walking energy + TEF.
 
@@ -136,21 +139,12 @@ def calculate_day(entry: dict, settings: dict, weight: float | None) -> dict:
     Step count is retained as a measurement, never silently converted to kcal.
     """
     bmr = None
-    percent_mode = settings.get("body_composition_mode", "fat_free_mass") == "body_fat"
-    composition = settings.get("body_fat_percent" if percent_mode else "fat_free_mass")
-    fat_free_mass = composition
-    if percent_mode:
-        fat_free_mass = weight * (1 - composition / 100) if weight is not None and composition is not None else None
-    formula = "cunningham_1991" if composition is not None else "mifflin_st_jeor"
-    if composition is not None:
-        if fat_free_mass is not None and (weight is None or fat_free_mass <= weight):
-            bmr = 370 + 21.6 * fat_free_mass
-    elif weight is not None and settings["age"] is not None and settings["age"] >= 18 and settings["height"] is not None and settings["sex"] in ("male", "female"):
+    if weight is not None and settings["age"] is not None and settings["age"] >= 18 and settings["height"] is not None and settings["sex"] in ("male", "female"):
         constant = 5 if settings["sex"] == "male" else -161
         bmr = 10 * weight + 6.25 * settings["height"] - 5 * settings["age"] + constant
         if bmr <= 0:
             bmr = None
-    calories = macro_energy(entry)
+    calories = intake_energy(entry)
     tef = macro_tef(entry)
     minutes = entry.get("training_minutes")
     met = entry.get("training_met") or 2.25
@@ -160,8 +154,8 @@ def calculate_day(entry: dict, settings: dict, weight: float | None) -> dict:
     deficit = tdee - calories if tdee is not None and calories is not None else None
     return {
         **entry, "calories": calories, "effective_weight": weight, "bmr": rounded(bmr),
-        "bmr_formula": formula,
-        "effective_fat_free_mass": rounded(fat_free_mass),
+        "calculated_calories": macro_energy(entry), "calories_source": calorie_source(entry),
+        "bmr_formula": "mifflin_st_jeor",
         "training_kcal": rounded(training), "tef": rounded(tef),
         "tdee": rounded(tdee), "deficit": rounded(deficit),
         "training_met_used": met, "has_data": has_data(entry),
@@ -172,13 +166,17 @@ def rounded(value):
     """Round half away from zero, consistently with the live JS model."""
     if value is None:
         return None
-    result = math.floor(abs(value) * 1000 + .5) / 1000
+    scaled = abs(value) * 1000
+    # Means and subtraction can land a few floating-point bits below a tie.
+    # Keep the half-away rule stable across Python and JavaScript.
+    tolerance = 4 * 2**-52 * max(1, scaled)
+    result = math.floor(scaled + .5 + tolerance) / 1000
     return (-result if value < 0 else result) if result else 0
 
 
 def has_data(entry: dict) -> bool:
     return any(entry.get(key) is not None for key in (
-        "weight", "protein", "fat", "carbs", "training_minutes", "steps", "steps_kcal"
+        "weight", "protein", "fat", "carbs", "calorie_override", "training_minutes", "steps", "steps_kcal"
     )) or bool(entry.get("note"))
 
 
@@ -213,7 +211,7 @@ def build_state(entries: list[dict], settings: dict, today: date | None = None, 
             progress = 100 if latest == goal else 0
         else:
             progress = max(0, min(100, 100 * (latest - start) / (goal - start)))
-    dates_with_data = {row["date"] for row in computed if row["weight"] is not None or any(row.get(key) is not None for key in ("protein", "fat", "carbs"))}
+    dates_with_data = {row["date"] for row in computed if row["weight"] is not None or any(row.get(key) is not None for key in ("protein", "fat", "carbs", "calorie_override"))}
     cursor = today if today.isoformat() in dates_with_data else today - timedelta(days=1)
     streak = 0
     while cursor.isoformat() in dates_with_data:

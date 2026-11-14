@@ -102,7 +102,7 @@ class EnergyModelTests(unittest.TestCase):
         self.assertLess(state["summary"]["total_deficit"], 0)
         self.assertAlmostEqual(state["summary"]["total_deficit"], sum(row["deficit"] for row in state["entries"]))
 
-    def test_no_manual_calories_or_future_dates(self):
+    def test_computed_calorie_key_and_future_dates_are_rejected(self):
         self.assertEqual(validate_entry({"date":"2026-11-08","weight":80},TODAY)["weight"],80)
         with self.assertRaises(ValidationError):
             validate_entry({"date":"2026-11-10","weight":80},TODAY)

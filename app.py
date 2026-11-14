@@ -5,6 +5,7 @@ import argparse
 import logging
 import os
 from pathlib import Path
+import sys
 import threading
 import webbrowser
 
@@ -16,6 +17,18 @@ from leanplan.desktop import (force_dark_window, install_autosave_close_guard,
                              CANVAS_WIDTH, CANVAS_HEIGHT)
 
 
+def default_data_dir(root: Path) -> Path:
+    """Keep one-file builds' journals outside their temporary extraction folder."""
+    override = os.environ.get("LEANPLAN_DATA_DIR")
+    if override:
+        return Path(override)
+    if getattr(sys, "frozen", False):
+        configured_local = os.environ.get("LOCALAPPDATA")
+        local = Path(configured_local) if configured_local else Path.home() / "AppData" / "Local"
+        return local / "Lean Plan" / "data"
+    return root / "data"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Lean Plan — your local daily journal")
     parser.add_argument("--browser", action="store_true", help="Open in a browser")
@@ -25,14 +38,15 @@ def main() -> None:
     args = parser.parse_args()
     enable_per_monitor_dpi()
     root = Path(__file__).resolve().parent
-    data_dir = args.data_dir or Path(os.environ.get("LEANPLAN_DATA_DIR", str(root / "data")))
+    data_dir = args.data_dir or default_data_dir(root)
     data_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(filename=data_dir / "app.log", level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s", encoding="utf-8")
     store = Store(data_dir)
     server = create_server(store, root / "static", args.port)
     url = f"http://127.0.0.1:{server.server_port}/"
-    print(f"Lean Plan: {url}", flush=True)
+    if sys.stdout is not None:
+        print(f"Lean Plan: {url}", flush=True)
     logging.info("Workspace available at %s", url)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

@@ -52,14 +52,7 @@ def main():
                 assert page.locator('[name=calorie_target]').count()==0
                 page.get_by_label('Today’s weight',exact=True).fill('80')
                 page.get_by_label('Goal weight · optional',exact=True).fill('75')
-                page.get_by_label('Fat-free mass · optional',exact=True).fill('57')
-                page.get_by_role('button',name='Body fat (%)',exact=True).click()
-                assert page.get_by_label('Body fat · optional',exact=True).input_value()=='28.75'
-                page.get_by_label('Body fat · optional',exact=True).fill('10')
-                assert page.evaluate('state.today_stats.effective_fat_free_mass')==72
-                page.screenshot(path=str(output/'body-fat-setup.png'))
-                page.get_by_role('button',name='FFM (kg)',exact=True).click()
-                assert page.get_by_label('Fat-free mass · optional',exact=True).input_value()=='57'
+                assert page.locator('[name=fat_free_mass],[name=body_fat_percent]').count()==0
                 page.get_by_role('button',name='Done',exact=True).click()
                 try:
                     page.wait_for_selector('[role=dialog]',state='detached',timeout=5000)
@@ -70,85 +63,17 @@ def main():
                 saved()
                 assert store.settings()['onboarding_done']
                 assert store.entries()[0]['weight']==80
-                assert store.settings()['fat_free_mass']==57
-                assert page.evaluate('state.today_stats.bmr')==1601.2
-                assert 'Cunningham 1991' in page.locator('#overview-readouts').inner_text()
-                page.screenshot(path=str(output/'ffm-overview.png'))
-                page.get_by_role('link',name='Settings',exact=True).click()
-                ffm_input=page.get_by_label('Fat-free mass · optional',exact=True)
-                ffm_input.fill('58')
-                assert page.evaluate('state.today_stats.bmr')==1622.8
-                saved()
-                ffm_input.fill('81')
-                assert ffm_input.get_attribute('aria-invalid')=='true'
-                saved()
-                assert store.settings()['fat_free_mass']==58
-                ffm_input.fill('57')
-                saved()
-                page.reload()
-                page.get_by_role('heading',name='Settings',exact=True).wait_for()
-                assert ffm_input.input_value()=='57'
-                assert '28.8' in page.locator('.composition-derived').inner_text()
-                page.screenshot(path=str(output/'ffm-settings.png'))
-                page.get_by_role('button',name='Formulas',exact=True).click()
-                assert '370 + 21.6' in page.locator('[role=dialog]').inner_text()
-                page.screenshot(path=str(output/'ffm-formulas.png'))
-                page.get_by_role('button',name='Close',exact=True).click()
-                # Percentage mode follows weight; fixed FFM keeps its own value.
-                page.get_by_role('button',name='Body fat (%)',exact=True).click()
-                fat_input=page.get_by_label('Body fat · optional',exact=True)
-                assert fat_input.input_value()=='10'
-                assert page.evaluate('state.today_stats.bmr')==1925.2
-                assert '72.0' in page.locator('.composition-derived').inner_text()
-                fat_input.fill('100')
-                assert fat_input.get_attribute('aria-invalid')=='true'
-                saved()
-                assert store.settings()['body_fat_percent']==10
-                fat_input.fill('12.5')
-                assert page.evaluate('state.today_stats.bmr')==1882
-                saved()
-                page.reload()
-                page.get_by_role('heading',name='Settings',exact=True).wait_for()
-                assert fat_input.input_value()=='12.5'
-                assert page.get_by_role('button',name='Body fat (%)',exact=True).get_attribute('aria-pressed')=='true'
-                page.screenshot(path=str(output/'body-fat-settings.png'))
-                page.get_by_role('link',name='Overview',exact=True).click()
-                page.locator('#latest-weight-input').fill('90')
-                assert page.evaluate('state.today_stats.effective_fat_free_mass')==78.75
-                assert page.evaluate('state.today_stats.bmr')==2071
-                saved()
-                assert store.state()['today_stats']['bmr']==2071
-                page.screenshot(path=str(output/'body-fat-weight-change.png'))
-                page.get_by_role('link',name='Settings',exact=True).click()
-                page.get_by_role('button',name='FFM (kg)',exact=True).click()
-                assert ffm_input.input_value()=='57'
-                assert page.evaluate('state.today_stats.bmr')==1601.2
-                page.get_by_role('button',name='Body fat (%)',exact=True).click()
-                assert fat_input.input_value()=='12.5'
-                fat_input.fill('')
-                assert page.evaluate('state.today_stats.bmr')==1876.25
-                page.get_by_role('button',name='FFM (kg)',exact=True).click()
-                ffm_input.fill('')
-                page.get_by_role('button',name='Body fat (%)',exact=True).click()
-                fat_input.fill('10')
-                page.get_by_role('button',name='FFM (kg)',exact=True).click()
-                assert ffm_input.input_value()=='81'
-                for _ in range(4):
-                    page.get_by_role('button',name='Body fat (%)',exact=True).click()
-                    page.get_by_role('button',name='FFM (kg)',exact=True).click()
-                saved()
-                assert store.settings()['body_composition_mode']=='fat_free_mass'
-                assert store.settings()['fat_free_mass']==81
-                ffm_input.fill('')
-                page.get_by_role('link',name='Overview',exact=True).click()
-                page.locator('#latest-weight-input').fill('80')
-                page.get_by_role('link',name='Settings',exact=True).click()
-                ffm_input.fill('')
                 assert page.evaluate('state.today_stats.bmr')==1776.25
-                saved()
-                assert store.settings()['fat_free_mass'] is None
-                page.get_by_role('link',name='Overview',exact=True).click()
                 assert 'Mifflin–St Jeor' in page.locator('#overview-readouts').inner_text()
+                page.get_by_role('link',name='Settings',exact=True).click()
+                assert page.locator('[name=fat_free_mass],[name=body_fat_percent]').count()==0
+                page.screenshot(path=str(output/'mifflin-settings.png'))
+                page.get_by_role('button',name='Formulas',exact=True).click()
+                assert '10 × kg + 6.25 × cm' in page.locator('[role=dialog]').inner_text()
+                assert '370 + 21.6' not in page.locator('[role=dialog]').inner_text()
+                page.screenshot(path=str(output/'mifflin-formulas.png'))
+                page.get_by_role('button',name='Close',exact=True).click()
+                page.get_by_role('link',name='Overview',exact=True).click()
                 assert page.get_by_role('button',name='Save',exact=False).count()==0
                 assert page.locator('.sidebar-user,.sidebar-note,.hero').count()==0
                 assert page.locator('input[name=calories]').count()==0
@@ -167,7 +92,7 @@ def main():
                     page.locator(f'#today-{macro}').fill(value)
                     assert page.evaluate('state.today_stats.calories')==calories
                     assert page.evaluate('state.today_stats.tef')==tef
-                    assert str(calories) in page.locator('#nutrition-totals').inner_text()
+                    assert page.locator('#today-calories').get_attribute('placeholder')==str(calories)
                     saved()
                     assert store.entries()[0]['calories']==calories
                     assert store.state()['today_stats']['tef']==tef
@@ -182,7 +107,7 @@ def main():
                 assert page.evaluate('state.today_stats.calories')==1140
                 page.locator('#today-carbs').fill('200')
                 # Readouts and charts change before persistence is awaited.
-                assert '1,940' in page.locator('#nutrition-totals').inner_text()
+                assert page.locator('#today-calories').get_attribute('placeholder')=='1,940'
                 assert '220.8' in page.locator('#nutrition-totals').inner_text()
                 assert '57' in page.locator('#overview-metrics').inner_text()
                 saved()
@@ -256,12 +181,12 @@ def main():
                 page.unroute('**/api/state',stale_refresh)
                 saved()
                 assert store.entries()[0]['protein']==180
-                assert '2,060' in page.locator('#nutrition-totals').inner_text()
+                assert page.locator('#today-calories').get_attribute('placeholder')=='2,060'
                 page.locator('#today-protein').fill('170')
                 saved()
                 # Clearing one field must remove its entire derived contribution.
                 page.locator('#today-carbs').fill('')
-                assert '1,220' in page.locator('#nutrition-totals').inner_text()
+                assert page.locator('#today-calories').get_attribute('placeholder')=='1,220'
                 assert '180.8' in page.locator('#nutrition-totals').inner_text()
                 saved()
                 assert store.state()['today_stats']['calories']==1220

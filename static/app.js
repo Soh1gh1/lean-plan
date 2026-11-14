@@ -39,10 +39,10 @@ const dayCount=value=>`${value} ${value===1?'day':'days'}`;
 const apart=(a,b)=>Math.round((dateObj(b)-dateObj(a))/86400000);
 const sum=values=>{let total=0,correction=0;for(const value of values){const next=total+value;correction+=Math.abs(total)>=Math.abs(value)?(total-next)+value:(value-next)+total;total=next;}return total+correction;};
 const average=values=>values.length?sum(values)/values.length:null;
-const round=value=>value==null?null:(Math.sign(value)*Math.round(Math.abs(value)*1000)/1000)||0;
+const round=value=>{if(value==null)return null;const scaled=Math.abs(value)*1000;return (Math.sign(value)*Math.floor(scaled+.5+4*Number.EPSILON*Math.max(1,scaled))/1000)||0;};
 const isPresent=value=>value!==null&&value!==undefined;
 const content=document.querySelector('#content'),modalRoot=document.querySelector('#modal-root');
-const dailyKeys=['weight','protein','fat','carbs','training_minutes','training_met','steps','steps_kcal','note'];
+const dailyKeys=['weight','protein','fat','carbs','calorie_override','training_minutes','training_met','steps','steps_kcal','note'];
 let base,state,page='overview',chartRange=30,journalPage=0,archiveView=null,modalArchive=null,archiveLoadSequence=0,modalDate=null,modalKind='',wizardStep=0,previousFocus,insightKind='weight',dayTab='measurements';
 let sequence=0,baseVersion=0,pumpPromise=null,saveTimer=null,retryTimer=null,toastTimer=null;
 const drafts=new Map();
@@ -54,22 +54,20 @@ async function api(path,payload){
   return result;
 }
 function nutrition(row){
-  if(['protein','fat','carbs'].every(key=>!isPresent(row[key])))return {calories:null,tef:null};
-  return {calories:round((row.protein??0)*4+(row.fat??0)*9+(row.carbs??0)*4),tef:round((row.protein??0)*1+(row.carbs??0)*.3+(row.fat??0)*.18)};
+  const macros=['protein','fat','carbs'].some(key=>isPresent(row[key])),manual=isPresent(row.calorie_override);
+  const calculated=macros?round((row.protein??0)*4+(row.fat??0)*9+(row.carbs??0)*4):null;
+  return {calories:manual?round(row.calorie_override):calculated,calculated_calories:calculated,calories_source:manual?'manual':macros?'macros':null,tef:macros?round((row.protein??0)*1+(row.carbs??0)*.3+(row.fat??0)*.18):null};
 }
-function hasData(row){return ['weight','protein','fat','carbs','training_minutes','steps','steps_kcal'].some(key=>isPresent(row[key]))||!!row.note;}
+function hasData(row){return ['weight','protein','fat','carbs','calorie_override','training_minutes','steps','steps_kcal'].some(key=>isPresent(row[key]))||!!row.note;}
+const isManualCalories=row=>row?.calories_source==='manual'||isPresent(row?.calorie_override);
 function calculate(row,settings,weight,weightDate){
   const n=nutrition(row);
-  const percentMode=settings.body_composition_mode==='body_fat';
-  const composition=percentMode?settings.body_fat_percent:settings.fat_free_mass;
-  const ffm=percentMode?(weight!=null&&composition!=null?weight*(1-composition/100):null):composition;
-  const formula=composition!=null?'cunningham_1991':'mifflin_st_jeor';
-  let bmr=composition!=null?(ffm!=null&&(weight==null||ffm<=weight)?370+21.6*ffm:null):weight!=null&&settings.age!=null&&settings.age>=18&&settings.height!=null&&['male','female'].includes(settings.sex)?10*weight+6.25*settings.height-5*settings.age+(settings.sex==='male'?5:-161):null;
+  let bmr=weight!=null&&settings.age!=null&&settings.age>=18&&settings.height!=null&&['male','female'].includes(settings.sex)?10*weight+6.25*settings.height-5*settings.age+(settings.sex==='male'?5:-161):null;
   if(bmr!==null&&bmr<=0)bmr=null;
   const met=row.training_met??2.25;
   const training=isPresent(row.training_minutes)&&weight!=null?row.training_minutes*(met-1)*3.5*weight/200:row.training_minutes===0?0:null;
   const expenditure=bmr===null?null:bmr+sum([training,row.steps_kcal,n.tef].filter(isPresent));
-  return {...row,...n,effective_weight:weight,weight_source_date:weightDate,effective_fat_free_mass:round(ffm),bmr:round(bmr),bmr_formula:formula,training_kcal:round(training),training_met_used:met,tdee:round(expenditure),deficit:round(expenditure!=null&&n.calories!=null?expenditure-n.calories:null),has_data:hasData(row)};
+  return {...row,...n,effective_weight:weight,weight_source_date:weightDate,bmr:round(bmr),bmr_formula:'mifflin_st_jeor',training_kcal:round(training),training_met_used:met,tdee:round(expenditure),deficit:round(expenditure!=null&&n.calories!=null?expenditure-n.calories:null),has_data:hasData(row)};
 }
 function rebuild(){
   const settings={...base.settings},rows=new Map(base.entries.map(row=>[row.date,{...row}]));
@@ -154,9 +152,8 @@ function balanceMetric(label,value,caption=''){
 function summaryMarkup(insights=false){
   const s=state.summary,t=state.today_stats;
   if(insights)return metric('Latest weight',fmt(s.latest_weight,1),'kg',s.latest_weight_date?dateText(s.latest_weight_date):'')+metric('Weight change',s.weight_change==null?'No data':`${s.weight_change>0?'+':''}${fmt(s.weight_change,1)}`,'kg')+metric('Average intake',fmt(s.average_calories),'kcal')+metric('Weekly change',s.trend_change==null?'No data':`${s.trend_change>0?'+':''}${fmt(s.trend_change,2)}`,'kg','7-day averages')+metric('Recorded days',fmt(s.entry_count),s.entry_count===1?'day':'days')+balanceMetric('Period balance',s.total_deficit,dayCount(s.deficit_days));
-  const ffm=t.bmr_formula==='cunningham_1991',formula=ffm?'Cunningham 1991':'Mifflin–St Jeor';
-  const help=ffm?(t.bmr==null?(state.settings.body_composition_mode==='body_fat'?'Body fat mode needs a recorded body weight.':'Fat-free mass cannot exceed body weight.'):`Estimated resting energy: 370 + 21.6 × fat-free mass (kg).${state.settings.body_composition_mode==='body_fat'?' Fat-free mass = body weight × (1 − body fat / 100).':''}`):(t.bmr==null?'Needs weight, age, height and a selected sex coefficient.':'Estimated resting energy: Mifflin–St Jeor uses weight, height, age and sex.');
-  return metric('BMR',fmt(t.bmr),'kcal',formula,'',help)+metric('Avg calories',fmt(s.average_calories),'kcal')+metric('Est. expenditure',fmt(t.tdee),'kcal','','','Resting energy + estimated TEF + net training + entered active walking kcal. Unlogged activity is not included.')+balanceMetric('Today',t.deficit)+balanceMetric('Period balance',s.total_deficit,dayCount(s.deficit_days));
+  const help=t.bmr==null?'Needs weight, age, height and a selected sex coefficient.':'Estimated resting energy: Mifflin–St Jeor uses weight, height, age and sex.';
+  return metric('BMR',fmt(t.bmr),'kcal','Mifflin–St Jeor','',help)+metric('Avg calories',fmt(s.average_calories),'kcal')+metric('Est. expenditure',fmt(t.tdee),'kcal','','','Resting energy + estimated TEF + net training + entered active walking kcal. Unlogged activity is not included.')+balanceMetric('Today',t.deficit)+balanceMetric('Period balance',s.total_deficit,dayCount(s.deficit_days));
 }
 function field(label,name,value,{unit='',type='number',min='',max='',id='',placeholder='',options=null,kind='',day='',help=''}={}){
   const fieldId=id||`${kind||'field'}-${name}`;
@@ -164,37 +161,12 @@ function field(label,name,value,{unit='',type='number',min='',max='',id='',place
   const control=options?`<select ${attrs}>${options.map(([v,text])=>`<option value="${v}" ${v===value?'selected':''}>${text}</option>`).join('')}</select>`:type==='textarea'?`<textarea ${attrs} rows="2" maxlength="2000" placeholder="${esc(placeholder)}">${esc(value)}</textarea>`:`<input ${attrs} type="${type}" value="${esc(value??'')}" placeholder="${esc(placeholder)}" ${type==='number'?`min="${min}" max="${max}" step="${['age','steps'].includes(name)?'1':'any'}" inputmode="decimal"`:''} ${type==='text'?'maxlength="60"':''}>`;
   return `<label class="field" for="${fieldId}"><span>${label}</span><div class="input-wrap">${control}${unit?`<small>${unit}</small>`:''}</div></label>`;
 }
-function bodyCompositionMarkup(context){
-  const percent=state.settings.body_composition_mode==='body_fat',name=percent?'body_fat_percent':'fat_free_mass',mode=percent?'body_fat':'fat_free_mass';
-  const control=field(percent?'Body fat · optional':'Fat-free mass · optional',name,state.settings[name],{kind:'settings',id:`${context}-${name}`,unit:percent?'%':'kg',min:percent?0:1,max:percent?100:500,help:percent?'Fat-free mass = recorded body weight × (1 − body fat / 100). Clear to use Mifflin–St Jeor.':'Body mass excluding fat, not muscle mass. Clear to use Mifflin–St Jeor.'});
-  return `<div class="body-composition" data-composition-context="${context}" data-composition-mode="${mode}"><div class="composition-head"><span>Body composition · optional</span><div class="segmented composition-mode" role="group" aria-label="Body composition input mode">${[['fat_free_mass','FFM (kg)'],['body_fat','Body fat (%)']].map(([key,label])=>`<button type="button" data-action="composition-mode" data-mode="${key}" aria-pressed="${mode===key}" class="${mode===key?'active':''}">${label}</button>`).join('')}</div></div><div class="composition-values">${control}<output class="composition-derived" aria-live="polite">${bodyCompositionEstimateMarkup()}</output></div></div>`;
-}
-function bodyCompositionEstimateMarkup(){
-  const percent=state.settings.body_composition_mode==='body_fat',weight=state.today_stats.effective_weight,ffm=state.today_stats.effective_fat_free_mass;
-  const value=percent?ffm:weight!=null&&ffm!=null&&ffm<=weight?100*(1-ffm/weight):null;
-  return `<span>${percent?'Fat-free mass':'Body fat'}</span><strong class="${value==null?'empty-value':''}">${fmt(round(value),1)}${value!=null?`<small>${percent?'kg':'%'}</small>`:''}</strong>`;
-}
-function syncBodyCompositionEditors(){
-  const mode=state.settings.body_composition_mode||'fat_free_mass';
-  document.querySelectorAll('[data-composition-context]').forEach(editor=>{
-    if(editor.dataset.compositionMode!==mode)editor.outerHTML=bodyCompositionMarkup(editor.dataset.compositionContext);
-    else editor.querySelector('output').innerHTML=bodyCompositionEstimateMarkup();
-  });
-}
-function switchBodyComposition(mode,context){
-  if(!['fat_free_mass','body_fat'].includes(mode)||mode===(state.settings.body_composition_mode||'fat_free_mass'))return;
-  const s=state.settings,weight=state.today_stats.effective_weight,patch={body_composition_mode:mode};
-  if(mode==='body_fat'&&s.body_fat_percent==null&&s.fat_free_mass!=null&&weight!=null&&s.fat_free_mass<=weight)patch.body_fat_percent=Math.round(100*(1-s.fat_free_mass/weight)*1e6)/1e6;
-  if(mode==='fat_free_mass'&&s.fat_free_mass==null&&s.body_fat_percent!=null&&weight!=null){const ffm=weight*(1-s.body_fat_percent/100);if(ffm>=1)patch.fat_free_mass=Math.round(ffm*1e6)/1e6;}
-  stageFields('settings',null,patch);
-  document.querySelector(`[data-composition-context="${context}"] [data-mode="${mode}"]`)?.focus({preventScroll:true});
-}
 
-function nutritionMarkup(day){const row=state.entries.find(entry=>entry.date===day)||{};const n=nutrition(row);return derivedMarkup('Calories',n.calories)+derivedMarkup('TEF',n.tef,1);}
+function nutritionMarkup(day){const row=state.entries.find(entry=>entry.date===day)||{};const n=nutrition(row);return derivedMarkup('Calories',n.calories,0,isManualCalories(row)?'manual-value':'')+derivedMarkup('TEF',n.tef,1);}
 function ranges(){return `<div class="segmented" role="group" aria-label="Chart range">${[[7,'7D'],[30,'30D'],[90,'90D'],[0,'All']].map(([days,label])=>`<button data-action="range" data-days="${days}" class="${chartRange===days?'active':''}" aria-pressed="${chartRange===days}">${label}</button>`).join('')}</div>`;}
 function chartMarkup(kind='weight',compact=false){
   const data=state.entries.filter(row=>(!chartRange||row.date>=shiftDate(state.today,-chartRange+1))&&row[kind]!=null);
-  if(!data.length)return `<div class="chart-empty">${icon(kind==='weight'?'chart':'flame')}<span>${kind==='weight'?'No measurements':'No macro totals'}</span></div>`;
+  if(!data.length)return `<div class="chart-empty">${icon(kind==='weight'?'chart':'flame')}<span>${kind==='weight'?'No measurements':'No calorie records'}</span></div>`;
   const W=912,H=compact?176:256,L=42,R=17,T=17,B=30,iw=W-L-R,ih=H-T-B;
   let start=kind==='weight'?data[0].date:chartRange?shiftDate(state.today,-chartRange+1):data[0].date;
   const end=kind==='weight'?data.at(-1).date:state.today;
@@ -217,7 +189,7 @@ function chartMarkup(kind='weight',compact=false){
     for(const row of data)result+=`<circle class="chart-dot ${row.entered_late?'late-dot':''}" cx="${x(row.date)}" cy="${y(row.weight)}" r="3.7"/><circle class="chart-hit" cx="${x(row.date)}" cy="${y(row.weight)}" r="13" tabindex="0" data-chart-date="${row.date}" data-chart-kind="weight"><title>${dateText(row.date)} · ${fmt(row.weight,1)} kg${row.entered_late?' · Late entry':''}</title></circle>`;
   }else{
     const width=Math.max(2,Math.min(23,iw/(span+1)*.65));
-    for(const row of data)result+=`<rect class="calorie-bar ${row.entered_late?'late-bar':''}" x="${x(row.date)-width/2}" y="${y(row.calories)}" width="${width}" height="${Math.max(2,H-B-y(row.calories))}" rx="3"/><rect class="chart-hit" x="${x(row.date)-Math.max(8,width/2)}" y="${T}" width="${Math.max(16,width)}" height="${ih}" tabindex="0" data-chart-date="${row.date}" data-chart-kind="calories"><title>${dateText(row.date)} · ${fmt(row.calories)} kcal</title></rect>`;
+    for(const row of data)result+=`<rect class="calorie-bar ${row.entered_late?'late-bar':''} ${isManualCalories(row)?'manual-bar':''}" x="${x(row.date)-width/2}" y="${y(row.calories)}" width="${width}" height="${Math.max(2,H-B-y(row.calories))}" rx="3"/><rect class="chart-hit" x="${x(row.date)-Math.max(8,width/2)}" y="${T}" width="${Math.max(16,width)}" height="${ih}" tabindex="0" data-chart-date="${row.date}" data-chart-kind="calories"><title>${dateText(row.date)} · ${fmt(row.calories)} kcal${isManualCalories(row)?' · Manual':''}${row.entered_late?' · Late entry':''}</title></rect>`;
   }
   return result+'</svg>';
 }
@@ -246,7 +218,7 @@ function journalListMarkup(){
   let html='<div class="journal-columns journal-labels"><span>Date</span><span>Weight</span><span>Calories</span><span>Balance</span><span>Status</span><span></span></div>';
   for(let index=journalPage*JOURNAL_PAGE_SIZE;index<Math.min(count,(journalPage+1)*JOURNAL_PAGE_SIZE);index++){
     const day=shiftDate(end,-index),row=rows.get(day),balance=row?.deficit;
-    html+=`<button class="journal-row journal-columns ${day===state.today&&!archiveView?'is-today':''}" data-day-cell="${day}" data-action="open-day" data-date="${day}" aria-label="Open ${day}"><span class="journal-date">${dateText(day,{day:'numeric',month:'short',year:'numeric'})}</span><span class="${row?.weight==null?'empty-value':''}">${fmt(row?.weight,1)}${row?.weight!=null?'<small>kg</small>':''}</span><span class="${row?.calories==null?'empty-value':''}">${fmt(row?.calories)}${row?.calories!=null?'<small>kcal</small>':''}</span><span class="${balance==null?'empty-value':balance>=0?'green':'rose'}">${balance==null?'No data':`${fmt(Math.abs(balance))}<small>${balance>0?'deficit':balance<0?'surplus':'balanced'}</small>`}</span><span>${dayStatus(row,day)}</span>${icon('chevron')}</button>`;
+    html+=`<button class="journal-row journal-columns ${day===state.today&&!archiveView?'is-today':''}" data-day-cell="${day}" data-action="open-day" data-date="${day}" aria-label="Open ${day}"><span class="journal-date">${dateText(day,{day:'numeric',month:'short',year:'numeric'})}</span><span class="${row?.weight==null?'empty-value':''}">${fmt(row?.weight,1)}${row?.weight!=null?'<small>kg</small>':''}</span><span class="${row?.calories==null?'empty-value':isManualCalories(row)?'manual-value':''}" ${isManualCalories(row)?'title="Manual calories"':''}>${fmt(row?.calories)}${row?.calories!=null?'<small>kcal</small>':''}</span><span class="${balance==null?'empty-value':balance>=0?'green':'rose'}">${balance==null?'No data':`${fmt(Math.abs(balance))}<small>${balance>0?'deficit':balance<0?'surplus':'balanced'}</small>`}</span><span>${dayStatus(row,day)}</span>${icon('chevron')}</button>`;
   }return html;
 }
 function journalFooterMarkup(){const {source,end,count,pages}=journalDays();return `<span>${dateText(source.journal_start)} – ${dateText(end,{day:'numeric',month:'short',year:'numeric'})}${archiveView?' · Read-only archive':''}</span><div class="journal-pagination"><span>${journalPage*JOURNAL_PAGE_SIZE+1}–${Math.min(count,(journalPage+1)*JOURNAL_PAGE_SIZE)} of ${dayCount(count)}</span><button class="icon-button" data-action="journal-page" data-delta="-1" aria-label="Newer days" ${journalPage===0?'disabled':''}>${icon('back')}</button><button class="icon-button" data-action="journal-page" data-delta="1" aria-label="Older days" ${journalPage>=pages-1?'disabled':''}>${icon('chevron')}</button></div>`;}
@@ -257,7 +229,7 @@ function renderInsights(){
 }
 function renderSettings(){
   const s=state.settings,opts={kind:'settings'};
-  const fields=field('Name','name',s.name,{...opts,type:'text',placeholder:''})+field('Age','age',s.age,{...opts,unit:'years',min:18,max:120})+field('Height','height',s.height,{...opts,unit:'cm',min:50,max:250})+field('Sex · BMR formula','sex',s.sex,{...opts,options:[['','Select'],['male','Male'],['female','Female']]})+bodyCompositionMarkup('settings')+field('Goal weight','goal_weight',s.goal_weight,{...opts,unit:'kg',min:20,max:500})+field('Default training intensity','training_met',s.training_met,{...opts,unit:'MET',min:1,max:25,placeholder:'2.25',help:'Standard MET intensity. The default 2.25 is a light-intensity assumption; choose the intensity for your activity.'});
+  const fields=field('Name','name',s.name,{...opts,type:'text',placeholder:''})+field('Age','age',s.age,{...opts,unit:'years',min:18,max:120})+field('Height','height',s.height,{...opts,unit:'cm',min:50,max:250})+field('Sex · BMR formula','sex',s.sex,{...opts,options:[['','Select'],['male','Male'],['female','Female']]})+field('Goal weight','goal_weight',s.goal_weight,{...opts,unit:'kg',min:20,max:500})+field('Default training intensity','training_met',s.training_met,{...opts,unit:'MET',min:1,max:25,placeholder:'2.25',help:'Standard MET intensity. The default 2.25 is a light-intensity assumption; choose the intensity for your activity.'});
   content.innerHTML=header('Settings')+`<section class="page-body settings-body" data-layout="page-body"><section class="settings-profile"><div class="section-head"><h2>Profile</h2></div><form class="settings-form" autocomplete="off"><div class="field-grid">${fields}</div></form><div class="panel-footer"><button class="button subtle" data-action="formulas">${icon('info')}Formulas</button></div></section><section class="settings-data"><div class="section-head"><h2>Data</h2></div><div class="data-actions"><button class="button subtle" data-action="export" data-format="json">${icon('download')}Export all data</button><button class="button subtle" data-action="export" data-format="csv">${icon('download')}Export CSV</button><button class="button subtle danger" data-action="clear-history">${icon('trash')}Clear history</button></div></section></section>`;
 }
 function render(){
@@ -269,16 +241,16 @@ function render(){
 function refreshPanels(){
   if(!state)return;
   const replace=(id,html)=>{const el=document.getElementById(id);if(el)el.innerHTML=html;};
-  replace('overview-readouts',summaryMarkup());replace('insight-metrics',summaryMarkup(true));replace('weight-plot',chartMarkup('weight',true));replace('insight-plot',chartMarkup(insightKind,true));replace('insight-legend',insightLegendMarkup());replace('goal-context',goalContextMarkup());replace('weekly-context',weeklyContextMarkup());replace('nutrition-totals',nutritionTotalsMarkup());replace('training-energy',derivedMarkup('Training energy',state.today_stats.training_kcal));
+  replace('overview-readouts',summaryMarkup());replace('insight-metrics',summaryMarkup(true));replace('weight-plot',chartMarkup('weight',true));replace('insight-plot',chartMarkup(insightKind,true));replace('insight-legend',insightLegendMarkup());replace('goal-context',goalContextMarkup());replace('weekly-context',weeklyContextMarkup());replace('nutrition-tef',nutritionTefMarkup());replace('training-energy',derivedMarkup('Training energy',state.today_stats.training_kcal));
   if(page==='history'){replace('journal-summary',journalSummaryMarkup());replace('journal-table',journalListMarkup());replace('journal-footer',journalFooterMarkup());const archiveButton=document.querySelector('[data-action=archive-period]');if(archiveButton)archiveButton.disabled=!!archiveView||!state.entries.some(r=>r.date<state.today&&r.has_data);}
   syncWeightEditor();
-  syncBodyCompositionEditors();
+  syncCalorieEditors();
   document.querySelectorAll('[data-nutrition]').forEach(el=>el.innerHTML=nutritionMarkup(el.dataset.nutrition));
   if(modalKind==='day')refreshDayDetail();
 }
 function openModal(html,kind){
   previousFocus=document.activeElement;modalKind=kind;modalRoot.innerHTML=`<div class="modal-backdrop"><section class="modal ${kind==='onboarding'?'onboarding':kind==='day'?'day-dialog':kind==='formulas'?'formula-dialog':kind==='archive'?'archive-dialog':'confirm-dialog'}" role="dialog" aria-modal="true" aria-labelledby="modal-title">${html}</section></div>`;
-  setTimeout(()=>modalRoot.querySelector('button:not(:disabled),input,select')?.focus(),20);
+  setTimeout(()=>{if(!modalRoot.contains(document.activeElement))modalRoot.querySelector('button:not(:disabled),input,select')?.focus();},20);
 }
 function closeModal(){modalRoot.innerHTML='';modalKind='';modalDate=null;modalArchive=null;previousFocus?.focus();flushAll().catch(()=>{});}
 function modalHead(title){return `<div class="modal-head"><h2 id="modal-title">${title}</h2><button class="icon-button" data-action="close" aria-label="Close">${icon('close')}</button></div>`;}
@@ -287,6 +259,7 @@ function dayModal(day,tab='measurements'){
   modalArchive=page==='history'?archiveView:null;modalDate=day;dayTab=tab;
   const row=dayData().entries.find(entry=>entry.date===day),opts={kind:'entry',day};
   openModal(`${modalHead(dateText(day,{day:'numeric',month:'long',year:'numeric'}))}<div class="day-meta" id="day-status">${dayStatus(row,day)}</div><div class="day-tabs" role="tablist" aria-label="Day details">${[['measurements','Measurements'],['activity','Activity']].map(([key,label])=>`<button role="tab" aria-selected="${tab===key}" data-action="day-tab" data-tab="${key}" class="${tab===key?'active':''}">${label}</button>`).join('')}</div><div class="day-pane" data-day-pane="measurements" ${tab==='measurements'?'':'hidden'}>${dayMeasurementsMarkup(day)}<div class="day-calculations" id="day-calculations"></div></div><div class="day-pane" data-day-pane="activity" ${tab==='activity'?'':'hidden'}><form class="field-grid" autocomplete="off">${field('Training time','training_minutes',row?.training_minutes,{...opts,unit:'min',min:0,max:1440,id:'day-training'})}<div id="day-training-energy"></div>${field('Steps','steps',row?.steps,{...opts,min:0,max:200000,id:'day-steps',help:'Step count is a separate log. Walking energy supplies the active kcal.'})}${field('Walking energy','steps_kcal',row?.steps_kcal,{...opts,unit:'kcal',min:0,max:20000,id:'day-walking',help:'Active walking kcal only, excluding resting energy and separately logged training.'})}</form></div><div class="modal-footer"><button class="button subtle danger" data-action="delete" data-date="${day}" ${row?'':'disabled'}>${icon('trash')}Delete day</button></div>`,'day');
+  document.querySelector('#day-calculations').innerHTML=`<div class="day-calorie derived-field"><span>Calories</span>${calorieEditorMarkup(day,'day')}</div><div id="day-derived-calculations"></div>`;
   if(modalArchive){modalRoot.querySelectorAll('[data-kind]').forEach(input=>input.disabled=true);modalRoot.querySelector('.modal-footer').innerHTML='<span class="archive-readonly">Read-only archive</span>';}
   refreshDayDetail();
 }
@@ -294,7 +267,8 @@ function refreshDayDetail(){
   const source=dayData(),row=source.entries.find(entry=>entry.date===modalDate),prior=[...source.entries].reverse().find(entry=>entry.date<modalDate&&entry.weight!=null)||source.baseline;
   const computed=row||calculate({date:modalDate},source.settings,prior?.weight??null,prior?.date??null);
   document.querySelector('#day-status').innerHTML=row?.has_data&&!row.entered_late&&modalDate!==state.today?'<span class="recorded-label">Recorded</span>':dayStatus(row,modalDate);
-  document.querySelector('#day-calculations').innerHTML=derivedMarkup('Calories',computed.calories)+derivedMarkup('TEF',computed.tef,1)+derivedMarkup('BMR',computed.bmr)+derivedMarkup(computed.deficit==null?'Balance':computed.deficit>=0?'Deficit':'Surplus',computed.deficit==null?null:Math.abs(computed.deficit),0,computed.deficit==null?'':computed.deficit>=0?'green':'rose');
+  document.querySelector('#day-derived-calculations').innerHTML=derivedMarkup('TEF',computed.tef,1)+derivedMarkup('BMR',computed.bmr)+derivedMarkup(computed.deficit==null?'Balance':computed.deficit>=0?'Deficit':'Surplus',computed.deficit==null?null:Math.abs(computed.deficit),0,computed.deficit==null?'':computed.deficit>=0?'green':'rose');
+  syncCalorieEditors();
   const deleteButton=document.querySelector('[data-action=delete]');if(deleteButton)deleteButton.disabled=!row;
   const training=document.querySelector('#day-training-energy');if(training)training.innerHTML=derivedMarkup('Training energy',computed.training_kcal);
 }
@@ -314,7 +288,7 @@ async function archiveModal(){
 async function confirmArchive(button){button.disabled=true;try{await flushAll();base=await api('/api/period/archive',{name:document.querySelector('#archive-name').value});baseVersion++;archiveLoadSequence++;archiveView=null;journalPage=0;rebuild();closeModal();render();toast('Period archived. Current balance starts from today.');}catch(error){modalRoot.querySelector('.error-message').textContent=error.message;button.disabled=false;}}
 function wizard(){
   const s=state.settings,opts={kind:'settings'};
-  const body=wizardStep===0?`<div class="field-grid">${field('Name','name',s.name,{...opts,type:'text',placeholder:''})}${field('Age','age',s.age,{...opts,unit:'years',min:18,max:120})}${field('Height','height',s.height,{...opts,unit:'cm',min:50,max:250})}${field('Sex · BMR formula','sex',s.sex,{...opts,options:[['','Select'],['male','Male'],['female','Female']]})}</div>`:`<div class="field-grid">${field('Today’s weight','weight',state.entries.find(row=>row.date===state.today)?.weight,{kind:'entry',day:state.today,unit:'kg',min:20,max:500,id:'setup-weight'})}${field('Goal weight · optional','goal_weight',s.goal_weight,{...opts,unit:'kg',min:20,max:500})}${bodyCompositionMarkup('setup')}</div>`;
+  const body=wizardStep===0?`<div class="field-grid">${field('Name','name',s.name,{...opts,type:'text',placeholder:''})}${field('Age','age',s.age,{...opts,unit:'years',min:18,max:120})}${field('Height','height',s.height,{...opts,unit:'cm',min:50,max:250})}${field('Sex · BMR formula','sex',s.sex,{...opts,options:[['','Select'],['male','Male'],['female','Female']]})}</div>`:`<div class="field-grid">${field('Today’s weight','weight',state.entries.find(row=>row.date===state.today)?.weight,{kind:'entry',day:state.today,unit:'kg',min:20,max:500,id:'setup-weight'})}${field('Goal weight · optional','goal_weight',s.goal_weight,{...opts,unit:'kg',min:20,max:500})}</div>`;
   openModal(`<div class="wizard-brand"><img src="/icon.svg" alt="" width="34" height="34"><span>lean<span>plan</span></span></div><div class="wizard-progress"><i class="active"></i><i class="${wizardStep===1?'active':''}"></i></div><div class="wizard-heading"><h2 id="modal-title">${wizardStep===0?'Your profile':'Starting point'}</h2><small>${wizardStep+1} / 2</small></div><form class="wizard-form">${body}<div class="wizard-actions"><button type="button" class="button text-button" data-action="setup-done">Skip for now</button><div>${wizardStep?'<button type="button" class="button subtle" data-action="setup-back">Back</button>':''}<button type="button" data-action="${wizardStep===0?'setup-next':'setup-done'}" class="button primary">${wizardStep===0?'Continue':'Done'}${icon('arrow')}</button></div></div></form>`,'onboarding');
 }
 function finishSetup(){stage('settings',null,'onboarding_done',true);closeModal();render();}
@@ -325,8 +299,7 @@ async function download(format){
 function inputChanged(input){
   if(!input.matches('[data-kind]'))return;
   if(input.id==='latest-weight-input')syncWeightEmptyLabel(input);
-  if(input.name==='fat_free_mass')input.setCustomValidity(input.value!==''&&state.summary.latest_weight!=null&&Number(input.value)>state.summary.latest_weight?'Fat-free mass cannot exceed latest weight.':'');
-  if(input.name==='body_fat_percent')input.setCustomValidity(input.value!==''&&Number(input.value)>=100?'Body fat must be below 100%.':'');
+  if(input.name==='calorie_override')syncCaloriePresentation(input);
   if(input.type==='number'&&(!input.validity.valid||input.validity.badInput)){input.setAttribute('aria-invalid','true');return;}
   input.removeAttribute('aria-invalid');
   const value=input.type==='number'?(input.value===''?null:Number(input.value)):input.name==='sex'&&input.value===''?null:input.value;
@@ -346,7 +319,6 @@ document.addEventListener('click',async event=>{
   const button=event.target.closest('[data-action]');if(!button||button.disabled)return;
   const action=button.dataset.action;
   if(action==='range'){chartRange=Number(button.dataset.days);document.querySelectorAll('[data-action=range]').forEach(el=>{el.classList.toggle('active',Number(el.dataset.days)===chartRange);el.setAttribute('aria-pressed',String(Number(el.dataset.days)===chartRange));});refreshPanels();}
-  else if(action==='composition-mode')switchBodyComposition(button.dataset.mode,button.closest('[data-composition-context]').dataset.compositionContext);
   else if(action==='open-day')dayModal(button.dataset.date);
   else if(action==='open-activity')dayModal(state.today,'activity');
   else if(action==='day-tab')selectDayTab(button.dataset.tab);
@@ -369,7 +341,7 @@ document.addEventListener('keydown',event=>{
   if(event.key==='Escape'&&modalKind!=='onboarding'){closeModal();return;}
   if(event.key==='Tab'){const focusable=[...modalRoot.querySelectorAll('button:not(:disabled),input,select,textarea,summary')].filter(el=>el.getClientRects().length),first=focusable[0],last=focusable.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}}
 });
-function showTooltip(target,x,y){const row=state.entries.find(entry=>entry.date===target.dataset.chartDate);if(!row)return;const frame=document.querySelector('#app-frame').getBoundingClientRect();x=(x-frame.left)/window.leanplanScale;y=(y-frame.top)/window.leanplanScale;const el=document.querySelector('#chart-tooltip');el.innerHTML=`<strong>${dateText(row.date)}</strong><span>${target.dataset.chartKind==='weight'?`${fmt(row.weight,1)} kg · mean ${fmt(row.weight_average,2)}`:`${fmt(row.calories)} kcal`}</span>${row.entered_late?'<small>Late entry</small>':''}`;el.style.display='block';el.style.left=`${Math.min(x+12,1200-210)}px`;el.style.top=`${Math.max(8,y-80)}px`;}
+function showTooltip(target,x,y){const row=state.entries.find(entry=>entry.date===target.dataset.chartDate);if(!row)return;const manual=target.dataset.chartKind==='calories'&&isManualCalories(row),frame=document.querySelector('#app-frame').getBoundingClientRect();x=(x-frame.left)/window.leanplanScale;y=(y-frame.top)/window.leanplanScale;const el=document.querySelector('#chart-tooltip');el.innerHTML=`<strong>${dateText(row.date)}</strong><span class="${manual?'manual-value':''}">${target.dataset.chartKind==='weight'?`${fmt(row.weight,1)} kg · mean ${fmt(row.weight_average,2)}`:`${fmt(row.calories)} kcal${manual?' · Manual':''}`}</span>${row.entered_late?'<small>Late entry</small>':''}`;el.style.display='block';el.style.left=`${Math.min(x+12,1200-210)}px`;el.style.top=`${Math.max(8,y-80)}px`;}
 document.addEventListener('pointerover',event=>{const hit=event.target.closest('[data-chart-date]');if(hit)showTooltip(hit,event.clientX,event.clientY);});
 document.addEventListener('pointerout',event=>{if(event.target.closest('[data-chart-date]'))document.querySelector('#chart-tooltip').style.display='none';});
 document.addEventListener('focusin',event=>{const hit=event.target.closest('[data-chart-date]');if(hit){const rect=hit.getBoundingClientRect();showTooltip(hit,rect.x,rect.y);}else document.querySelector('#chart-tooltip').style.display='none';});
@@ -389,7 +361,28 @@ function overviewEditorMarkup(){
   const day=state.today,row=state.entries.find(entry=>entry.date===day)||{},opts={kind:'entry',day};
   return `<div class="nutrition-content"><div class="nutrition-totals" id="nutrition-totals">${nutritionTotalsMarkup()}</div><form class="macro-editor" autocomplete="off">${[['Protein','protein',1000],['Carbs','carbs',2000],['Fat','fat',1000]].map(([label,key,max])=>field(label,key,row[key],{...opts,unit:'g',min:0,max,id:`today-${key}`})).join('')}</form></div>`;
 }
-function nutritionTotalsMarkup(){const t=state.today_stats;return `<strong class="calorie-total ${t.calories==null?'empty-value':''}">${fmt(t.calories)}${t.calories!=null?'<small>kcal</small>':''}</strong><div class="tef-total"><span>TEF</span><strong class="${t.tef==null?'empty-value':''}">${fmt(t.tef,1)}${t.tef!=null?'<small>kcal</small>':''}</strong></div>`;}
+function nutritionTotalsMarkup(){return calorieEditorMarkup(state.today,'today')+`<div id="nutrition-tef">${nutritionTefMarkup()}</div>`;}
+function nutritionTefMarkup(){const t=state.today_stats;return `<div class="tef-total"><span>TEF</span><strong class="${t.tef==null?'empty-value':''}">${fmt(t.tef,1)}${t.tef!=null?'<small>kcal</small>':''}</strong></div>`;}
+function calorieEditorRow(day,context){const source=context==='day'?dayData():state;return source.entries.find(row=>row.date===day)||{};}
+function automaticCalories(row){return Object.hasOwn(row,'calculated_calories')?row.calculated_calories:row.calories??null;}
+function calorieEditorMarkup(day,context){
+  const row=calorieEditorRow(day,context),auto=automaticCalories(row),manual=isManualCalories(row),empty=row.calorie_override==null&&auto==null;
+  return `<div class="calorie-editor ${empty?'is-empty':''}" data-calorie-context="${context}"><input id="${context}-calories" aria-label="Calories" name="calorie_override" type="number" min="0" max="50000" step="any" inputmode="decimal" data-kind="entry" data-date="${day}" value="${esc(row.calorie_override??'')}" placeholder="${auto!=null?fmt(auto):''}" class="${manual?'manual-value':''}" title="${manual?'Manual calories. Clear to calculate from macros.':'Calculated from macros. Enter your own calories to override.'}"><small>kcal</small><span class="calorie-empty">No data</span></div>`;
+}
+function syncCaloriePresentation(input){
+  input.parentElement.classList.toggle('is-empty',input.value===''&&input.placeholder===''&&!input.validity.badInput);
+  input.classList.toggle('manual-value',input.value!=='');
+  const description=input.value!==''?'Manual calories. Clear to calculate from macros.':'Calculated from macros. Enter your own calories to override.';
+  input.title=description;input.setAttribute('aria-description',description);
+}
+function syncCalorieEditors(){
+  document.querySelectorAll('[data-calorie-context] input').forEach(input=>{
+    const row=calorieEditorRow(input.dataset.date,input.parentElement.dataset.calorieContext),auto=automaticCalories(row);
+    if(document.activeElement!==input&&!input.hasAttribute('aria-invalid'))input.value=row.calorie_override??'';
+    input.placeholder=auto!=null?fmt(auto):'';
+    syncCaloriePresentation(input);
+  });
+}
 function overviewActivityMarkup(){
   const day=state.today,row=state.entries.find(entry=>entry.date===day)||{},opts={kind:'entry',day};
   return `<form class="activity-editor" autocomplete="off"><div class="activity-inputs">${field('Training time','training_minutes',row.training_minutes,{...opts,unit:'min',min:0,max:1440,id:'today-training'})}<div id="training-energy">${derivedMarkup('Training energy',state.today_stats.training_kcal)}</div>${field('Steps','steps',row.steps,{...opts,min:0,max:200000,id:'today-steps',help:'Step count is a separate log. Active walking kcal are entered in Walking energy and counted once.'})}${field('Walking energy','steps_kcal',row.steps_kcal,{...opts,unit:'kcal',min:0,max:20000,id:'today-walking',help:'Active walking kcal only, excluding resting energy and any training logged separately.'})}</div></form>`;
@@ -425,8 +418,8 @@ function weeklyContextMarkup(){
   return `<div class="context-title"><h2>7-day averages</h2></div><div class="weekly-values">${[['This week',s.recent_average],['Previous week',s.previous_average]].map(([label,value])=>`<div><span>${label}</span><strong class="${value==null?'empty-value':''}">${fmt(value,2)}${value!=null?'<small>kg</small>':''}</strong></div>`).join('')}</div>`;
 }
 
-function insightLegendMarkup(){return insightKind==='weight'?'<span><i></i>Weight</span><span><i class="mean"></i>7-day mean</span>':'<span><i></i>Calories from macros</span><span><i class="late"></i>Late entry</span>';}
-function formulasModal(){openModal(`${modalHead('Formulas')}<dl class="formulas"><dt>Calories</dt><dd>Protein × 4 + fat × 9 + carbs × 4</dd><dt>TEF estimate</dt><dd>Protein × 1 + carbs × 0.3 + fat × 0.18<small>25% of protein, 7.5% of carb and 2% of fat energy.</small></dd><dt>BMR · with FFM</dt><dd>370 + 21.6 × fat-free mass (kg)<small>Cunningham 1991. With body fat: FFM = weight × (1 − body fat / 100).</small></dd><dt>BMR · no FFM</dt><dd>10 × kg + 6.25 × cm − 5 × age + sex constant<small>Mifflin–St Jeor, adults. Male +5; female −161.</small></dd><dt>Net training</dt><dd>Minutes × (MET − 1) × 3.5 × kg ÷ 200<small>Activity above the standard 1-MET resting level.</small></dd><dt>Walking</dt><dd>Entered active walking kcal only.<small>Steps are logged separately and do not add more kcal.</small></dd><dt>Balance</dt><dd>BMR + net training + walking + TEF − calories</dd></dl><p class="formula-note">Energy values are estimates. Unlogged activity is not included.</p>`,'formulas');}
+function insightLegendMarkup(){return insightKind==='weight'?'<span><i></i>Weight</span><span><i class="mean"></i>7-day mean</span>':'<span><i></i>Calculated</span><span><i class="manual"></i>Manual</span><span><i class="late"></i>Late entry</span>';}
+function formulasModal(){openModal(`${modalHead('Formulas')}<dl class="formulas"><dt>Calories</dt><dd>Protein × 4 + fat × 9 + carbs × 4<small>A manual calorie value takes priority; clear it to use macros.</small></dd><dt>TEF estimate</dt><dd>Protein × 1 + carbs × 0.3 + fat × 0.18<small>25% of protein, 7.5% of carb and 2% of fat energy.</small></dd><dt>BMR</dt><dd>10 × kg + 6.25 × cm − 5 × age + sex constant<small>Mifflin–St Jeor, adults. Male +5; female −161.</small></dd><dt>Net training</dt><dd>Minutes × (MET − 1) × 3.5 × kg ÷ 200<small>Activity above the standard 1-MET resting level.</small></dd><dt>Walking</dt><dd>Entered active walking kcal only.<small>Steps are logged separately and do not add more kcal.</small></dd><dt>Balance</dt><dd>BMR + net training + walking + TEF − calories</dd></dl><p class="formula-note">Energy values are estimates. Unlogged activity is not included.</p>`,'formulas');}
 function fitCanvas(){
   const width=1200,height=780,scale=Math.min(innerWidth/width,innerHeight/height),frame=document.querySelector('#app-frame');
   frame.style.transform=`scale(${scale})`;frame.style.left=`${(innerWidth-width*scale)/2}px`;frame.style.top=`${(innerHeight-height*scale)/2}px`;window.leanplanScale=scale;

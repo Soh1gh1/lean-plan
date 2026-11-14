@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import sqlite3
 
-from .domain import DEFAULT_SETTINGS, ValidationError, build_state, has_data, macro_energy, validate_entry, validate_settings
+from .domain import DEFAULT_SETTINGS, ValidationError, build_state, has_data, macro_energy, intake_energy, calorie_source, validate_entry, validate_settings
 
 
 class Store:
@@ -24,6 +24,7 @@ class Store:
                     training_met REAL, steps INTEGER, steps_kcal REAL, note TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                     protein REAL, fat REAL, carbs REAL,
+                    calorie_override REAL,
                     entered_late INTEGER NOT NULL DEFAULT 0, first_recorded_on TEXT
                 );
                 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -37,7 +38,7 @@ class Store:
         with self.connect() as db:
             columns = {row["name"] for row in db.execute("PRAGMA table_info(entries)")}
         definitions = {"protein": "REAL", "fat": "REAL", "carbs": "REAL",
-                       "entered_late": "INTEGER NOT NULL DEFAULT 0", "first_recorded_on": "TEXT"}
+                       "entered_late": "INTEGER NOT NULL DEFAULT 0", "first_recorded_on": "TEXT", "calorie_override": "REAL"}
         missing = [key for key in definitions if key not in columns]
         if missing:
             self.backup(force=True)
@@ -152,15 +153,16 @@ class Store:
     @staticmethod
     def _write_entry(db, entry):
         now = datetime.now().isoformat(timespec="seconds")
-        columns = ("date", "weight", "calories", "training_minutes", "training_met", "steps", "steps_kcal", "note", "protein", "fat", "carbs", "entered_late", "first_recorded_on")
+        columns = ("date", "weight", "calories", "training_minutes", "training_met", "steps", "steps_kcal", "note", "protein", "fat", "carbs", "entered_late", "first_recorded_on", "calorie_override")
         entry = {"entered_late": 0, "first_recorded_on": entry["date"], **entry}
         values = [entry[key] for key in columns] + [now, now]
         db.execute("""
-            INSERT INTO entries (date,weight,calories,training_minutes,training_met,steps,steps_kcal,note,protein,fat,carbs,entered_late,first_recorded_on,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET
+            INSERT INTO entries (date,weight,calories,training_minutes,training_met,steps,steps_kcal,note,protein,fat,carbs,entered_late,first_recorded_on,calorie_override,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(date) DO UPDATE SET
             weight=excluded.weight,calories=excluded.calories,training_minutes=excluded.training_minutes,
             training_met=excluded.training_met,steps=excluded.steps,steps_kcal=excluded.steps_kcal,
             note=excluded.note,protein=excluded.protein,fat=excluded.fat,carbs=excluded.carbs,
+            calorie_override=excluded.calorie_override,
             entered_late=excluded.entered_late,first_recorded_on=excluded.first_recorded_on,updated_at=excluded.updated_at
         """, values)
 
@@ -168,7 +170,7 @@ class Store:
         if not isinstance(payload, dict):
             raise ValidationError("Invalid journal entry.")
         if payload.get("calories") not in (None, ""):
-            raise ValidationError("Calories are calculated from macros.")
+            raise ValidationError("Use calorie_override for manual calories.")
         from .domain import validate_date
         entry_date = validate_date(payload.get("date"), self.today())
         self.backup()
@@ -178,7 +180,7 @@ class Store:
             if entry_date < start and db.execute("SELECT 1 FROM archives LIMIT 1").fetchone():
                 raise ValidationError("This date belongs to a closed period. Archives are read-only.")
             existing = db.execute("SELECT * FROM entries WHERE date=?", (entry_date,)).fetchone()
-            editable = ("weight", "protein", "fat", "carbs", "training_minutes", "training_met", "steps", "steps_kcal", "note")
+            editable = ("weight", "protein", "fat", "carbs", "calorie_override", "training_minutes", "training_met", "steps", "steps_kcal", "note")
             merged = {key: existing[key] for key in editable} if existing else {}
             merged.update({key: payload[key] for key in editable if key in payload})
             entry = validate_entry({"date": entry_date, **merged}, self.today())
@@ -194,21 +196,10 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             settings = validate_settings(payload, self.settings(db))
-            if "fat_free_mass" in payload or "body_composition_mode" in payload:
-                self._check_fat_free_mass(settings, db)
             db.execute("UPDATE settings SET value=? WHERE id=1", (json.dumps(settings, ensure_ascii=False),))
             if "training_met" in payload:
                 db.execute("UPDATE entries SET training_met=?,updated_at=? WHERE date=?",
                            (settings["training_met"], datetime.now().isoformat(timespec="seconds"), self.today().isoformat()))
-
-    def _check_fat_free_mass(self, settings, db, weight=None):
-        if settings["body_composition_mode"] != "fat_free_mass" or settings["fat_free_mass"] is None:
-            return
-        if weight is None:
-            latest = db.execute("SELECT weight FROM entries WHERE weight IS NOT NULL ORDER BY date DESC LIMIT 1").fetchone()
-            weight = latest[0] if latest else (self.baseline(db) or {}).get("weight")
-        if weight is not None and settings["fat_free_mass"] > weight:
-            raise ValidationError("Fat-free mass cannot exceed latest weight.")
 
     def onboard(self, payload):
         if not isinstance(payload, dict):
@@ -221,7 +212,6 @@ class Store:
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             settings = validate_settings({**payload.get("settings", {}), "onboarding_done": True}, self.settings(db))
-            self._check_fat_free_mass(settings, db, entry["weight"] if entry else None)
             db.execute("UPDATE settings SET value=? WHERE id=1", (json.dumps(settings, ensure_ascii=False),))
             if entry:
                 existing = db.execute("SELECT * FROM entries WHERE date=?", (entry["date"],)).fetchone()
@@ -251,7 +241,8 @@ class Store:
             db.execute("BEGIN")
             return {"format": "leanplan", "version": 4,
                     "exported_at": datetime.now().isoformat(timespec="seconds"),
-                    "settings": self.settings(db), "entries": [{**row, "calories": macro_energy(row)} for row in self.entries(db)],
+                    "settings": self.settings(db), "entries": [{**row, "calories": intake_energy(row),
+                        "calculated_calories": macro_energy(row), "calories_source": calorie_source(row)} for row in self.entries(db)],
                     "journal_start": db.execute("SELECT value FROM metadata WHERE key='journal_start'").fetchone()[0],
                     "baseline": self.baseline(db),
                     "archives": [json.loads(row[0]) for row in db.execute("SELECT snapshot FROM archives ORDER BY id")]}

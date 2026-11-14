@@ -58,11 +58,13 @@ def create_server(store, static_dir: Path, port=0):
                 if path == "/api/export/csv":
                     stream = io.StringIO(newline="")
                     writer = csv.writer(stream, delimiter=";")
-                    keys = ("date", "weight", "protein", "fat", "carbs", "calories", "training_minutes", "steps", "steps_kcal", "bmr", "training_kcal", "tef", "tdee", "deficit", "entered_late", "first_recorded_on", "note")
-                    writer.writerow(("Date", "Weight, kg", "Protein, g", "Fat, g", "Carbs, g", "Calculated calories, kcal", "Training, minutes", "Steps", "Walking, kcal", "BMR", "Training, kcal", "TEF", "Expenditure, kcal", "Deficit, kcal", "Late entry", "First recorded on", "Note"))
+                    keys = ("date", "weight", "protein", "fat", "carbs", "calories", "training_minutes", "steps", "steps_kcal", "bmr", "training_kcal", "tef", "tdee", "deficit", "entered_late", "first_recorded_on", "calculated_calories", "calorie_override", "calories_source", "note")
+                    writer.writerow(("Date", "Weight, kg", "Protein, g", "Fat, g", "Carbs, g", "Calories, kcal", "Training, minutes", "Steps", "Walking, kcal", "BMR", "Training, kcal", "TEF", "Expenditure, kcal", "Deficit, kcal", "Late entry", "First recorded on", "Calculated calories, kcal", "Manual calories, kcal", "Calories source", "Note"))
                     archive_id = parse_qs(urlsplit(self.path).query).get("archive", [None])[0]
                     source = store.archive(archive_id) if archive_id else store.state()
                     for row in source["entries"]:
+                        row = {"calculated_calories": row.get("calories"),
+                               "calories_source": "macros" if row.get("calories") is not None else None, **row}
                         values = [row.get(key, "") for key in keys]
                         if isinstance(values[-1], str) and values[-1].lstrip().startswith(("=", "+", "-", "@")):
                             values[-1] = "'" + values[-1]

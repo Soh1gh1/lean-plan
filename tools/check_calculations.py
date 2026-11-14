@@ -20,7 +20,8 @@ from leanplan.store import Store
 ROOT = Path(__file__).resolve().parents[1]
 TODAY = date(2026, 11, 14)
 DAILY_FIELDS = ('calories', 'tef', 'bmr', 'training_kcal', 'training_met_used', 'tdee',
-                'deficit', 'effective_weight', 'has_data', 'bmr_formula', 'effective_fat_free_mass')
+                'deficit', 'effective_weight', 'has_data', 'bmr_formula',
+                'calorie_override', 'calculated_calories', 'calories_source')
 SUMMARY_FIELDS = ('entry_count', 'weight_count', 'calorie_count', 'latest_weight',
                   'latest_weight_date', 'start_weight', 'start_date', 'weight_change',
                   'average_calories', 'total_deficit', 'deficit_days', 'recent_average',
@@ -36,24 +37,20 @@ def main():
                'fat': 60, 'training_minutes': 45, 'training_met': 4, 'steps': 12000,
                'steps_kcal': 250}
     for setting_patch in ({}, {'sex': 'female'}, {'sex': None}, {'age': None}, {'height': None},
-                          {'fat_free_mass': 57}, {'fat_free_mass': 57, 'age': None, 'height': None, 'sex': None},
-                          {'fat_free_mass': 80}, {'fat_free_mass': 80.001}, {'fat_free_mass': None},
+                          {'fat_free_mass': 57},
                           {'body_composition_mode': 'body_fat', 'body_fat_percent': 10, 'fat_free_mass': 57},
-                          {'body_composition_mode': 'body_fat', 'body_fat_percent': 0},
-                          {'body_composition_mode': 'body_fat', 'body_fat_percent': None, 'fat_free_mass': 57},
-                          {'body_composition_mode': 'body_fat', 'body_fat_percent': 99.99},
-                          {'body_composition_mode': 'body_fat', 'body_fat_percent': 10, 'age': None, 'height': None, 'sex': None}):
+                          {'fat_free_mass': 57, 'age': None, 'height': None, 'sex': None}):
         for entry_patch in ({}, {'weight': None}, {'protein': None, 'fat': None, 'carbs': None},
                             {'protein': 0, 'fat': None, 'carbs': None},
-                            {'training_minutes': 0}, {'training_met': 1}):
-            settings = validate_settings({**profile, **setting_patch})
+                            {'training_minutes': 0}, {'training_met': 1},
+                            {'calorie_override': 1020}, {'calorie_override': 0},
+                            {'calorie_override': 50000},
+                            {'protein': None, 'fat': None, 'carbs': None, 'calorie_override': 1100}):
+            settings = {**validate_settings(profile), **setting_patch}
             row = validate_entry({**control, **entry_patch}, TODAY)
             cases.append({'settings': settings, 'entry': row, 'weight': row['weight']})
     for _ in range(500):
         settings = validate_settings({'sex': rng.choice(['male', 'female', None]),
-                                      'body_composition_mode': rng.choice(['body_fat', 'fat_free_mass']),
-                                      'body_fat_percent': rng.choice([None, None, 0, round(rng.uniform(5, 50), 3)]),
-                                      'fat_free_mass': rng.choice([None, None, round(rng.uniform(20, 100), 3)]),
                                       'age': rng.choice([None, rng.randint(18, 100)]),
                                       'height': rng.choice([None, round(rng.uniform(120, 220), 3)])})
         row = validate_entry({'date': TODAY.isoformat(),
@@ -61,6 +58,7 @@ def main():
                               'protein': rng.choice([None, 0, round(rng.uniform(0, 300), 3)]),
                               'fat': rng.choice([None, 0, round(rng.uniform(0, 180), 3)]),
                               'carbs': rng.choice([None, 0, round(rng.uniform(0, 500), 3)]),
+                              'calorie_override': rng.choice([None, None, 0, 1020, round(rng.uniform(500, 5000), 3)]),
                               'training_minutes': rng.choice([None, 0, round(rng.uniform(0, 240), 3)]),
                               'training_met': rng.choice([None, 1, 2.25, 3.5, 6, 10]),
                               'steps': rng.choice([None, 0, 10000]),
@@ -70,9 +68,6 @@ def main():
     fixtures = []
     for index in range(120):
         settings = validate_settings({'sex': rng.choice(['male', 'female', None]),
-                                      'body_composition_mode': rng.choice(['body_fat', 'fat_free_mass']),
-                                      'body_fat_percent': rng.choice([None, 10, 25.125]),
-                                      'fat_free_mass': rng.choice([None, None, 57, 60.125]),
                                       'age': 35, 'height': 180, 'goal_weight': rng.choice([None, 70, 80, 90])})
         baseline = {'weight': 80, 'date': (TODAY-timedelta(days=40)).isoformat()} if index % 3 == 0 else None
         rows = []
@@ -84,6 +79,7 @@ def main():
                                         'protein': rng.choice([None, 0, 150, 150.125]),
                                         'carbs': rng.choice([None, 0, 200, 200.625]),
                                         'fat': rng.choice([None, 0, 60, 60.375]),
+                                        'calorie_override': rng.choice([None, None, 0, 1020, 1940.125]),
                                         'training_minutes': rng.choice([None, 0, 45, 60]),
                                         'training_met': rng.choice([None, 2.25, 3.5, 6]),
                                         'steps_kcal': rng.choice([None, 0, 100, 200.125])}, TODAY))
