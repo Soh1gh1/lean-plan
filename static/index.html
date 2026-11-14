@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101116">
+  <meta name="color-scheme" content="dark">
+  <title>Lean Plan — Your progress, in perspective</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="viewport"><div id="app-frame">
+  <aside class="sidebar">
+    <a class="brand" href="#overview" data-page="overview" aria-label="Lean Plan home"><img src="/icon.svg" alt="" width="36" height="36"><span>lean<span>plan</span></span></a>
+    <nav aria-label="Main navigation">
+      <a href="#overview" data-page="overview"><span data-icon="grid"></span>Overview</a>
+      <a href="#history" data-page="history"><span data-icon="calendar"></span>Daily journal</a>
+      <a href="#insights" data-page="insights"><span data-icon="chart"></span>Insights</a>
+      <a href="#settings" data-page="settings"><span data-icon="settings"></span>Settings</a>
+    </nav>
+    <div id="sync-status" data-state="saved" role="status" aria-live="polite"><span></span><span>Saved on device</span></div>
+  </aside>
+  <main id="main" tabindex="-1"><div id="content"></div></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="modal-root"></div>
+  <div id="chart-tooltip" class="chart-tooltip" role="tooltip"></div>
+  </div></div>
+</body>
+</html>
